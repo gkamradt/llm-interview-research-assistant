@@ -1,107 +1,254 @@
-import streamlit as st
+# LLMs
 from langchain import PromptTemplate
-from langchain.llms import OpenAI
+from langchain.chat_models import ChatOpenAI
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chains.summarize import load_summarize_chain
+from langchain.prompts import PromptTemplate
 
-template = """
-    Below is an email that may be poorly worded.
-    Your goal is to:
-    - Properly format the email
-    - Convert the input text to a specified tone
-    - Convert the input text to a specified dialect
+# Streamlit
+import streamlit as st
 
-    Here are some examples different Tones:
-    - Formal: We went to Barcelona for the weekend. We have a lot of things to tell you.
-    - Informal: Went to Barcelona for the weekend. Lots to tell you.  
+# Twitter
+import tweepy
 
-    Here are some examples of words in different dialects:
-    - American: French Fries, cotton candy, apartment, garbage, cookie, green thumb, parking lot, pants, windshield
-    - British: chips, candyfloss, flag, rubbish, biscuit, green fingers, car park, trousers, windscreen
+# Scraping
+import requests
+from bs4 import BeautifulSoup
+from markdownify import markdownify as md
 
-    Example Sentences from each dialect:
-    - American: I headed straight for the produce section to grab some fresh vegetables, like bell peppers and zucchini. After that, I made my way to the meat department to pick up some chicken breasts.
-    - British: Well, I popped down to the local shop just the other day to pick up a few bits and bobs. As I was perusing the aisles, I noticed that they were fresh out of biscuits, which was a bit of a disappointment, as I do love a good cuppa with a biscuit or two.
+# YouTube
+from langchain.document_loaders import YoutubeLoader
+# !pip install youtube-transcript-api
 
-    Please start the email with a warm introduction. Add the introduction if you need to.
-    
-    Below is the email, tone, and dialect:
-    TONE: {tone}
-    DIALECT: {dialect}
-    EMAIL: {email}
-    
-    YOUR {dialect} RESPONSE:
-"""
+# Environment Variables
+import os
+from dotenv import load_dotenv
 
-prompt = PromptTemplate(
-    input_variables=["tone", "dialect", "email"],
-    template=template,
-)
+load_dotenv()
 
+# Get your API keys set
+TWITTER_API_KEY = os.getenv('TWITTER_API_KEY', 'YourAPIKeyIfNotSet')
+TWITTER_API_SECRET = os.getenv('TWITTER_API_SECRET', 'YourAPIKeyIfNotSet')
+TWITTER_ACCESS_TOKEN = os.getenv('TWITTER_ACCESS_TOKEN', 'YourAPIKeyIfNotSet')
+TWITTER_ACCESS_TOKEN_SECRET = os.getenv('TWITTER_ACCESS_TOKEN_SECRET', 'YourAPIKeyIfNotSet')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'YourAPIKeyIfNotSet')
+
+# Load up your LLM
 def load_LLM(openai_api_key):
     """Logic for loading the chain you want to use should go here."""
     # Make sure your openai_api_key is set as an environment variable
-    llm = OpenAI(temperature=.7, openai_api_key=openai_api_key)
+    llm = ChatOpenAI(temperature=.7, openai_api_key=openai_api_key, max_tokens=2000, model_name='gpt-4')
     return llm
 
-st.set_page_config(page_title="Globalize Email", page_icon=":robot:")
-st.header("Globalize Text")
+def get_openai_api_key():
+    input_text = st.text_input(label="OpenAI API Key (or set it as .env variable)",  placeholder="Ex: sk-2twmA8tfCb8un4...", key="openai_api_key_input")
+    return input_text
+
+# We'll query 80 tweets because we end up filtering out a bunch
+def get_original_tweets(screen_name, tweets_to_pull=80, tweets_to_return=80):
+    st.write("Getting Tweets...")
+    # Tweepy set up
+    auth = tweepy.OAuthHandler(TWITTER_API_KEY, TWITTER_API_SECRET)
+    auth.set_access_token(TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET)
+    api = tweepy.API(auth)
+
+    # Holder for the tweets you'll find
+    tweets = []
+    
+    # Go and pull the tweets
+    tweepy_results = tweepy.Cursor(api.user_timeline,
+                                   screen_name=screen_name,
+                                   tweet_mode='extended',
+                                   exclude_replies=True).items(tweets_to_pull)
+    
+    # Run through tweets and remove retweets and quote tweets so we can only look at a user's raw emotions
+    for status in tweepy_results:
+        if hasattr(status, 'retweeted_status') or hasattr(status, 'quoted_status'):
+            # Skip if it's a retweet or quote tweet
+            continue
+        else:
+            tweets.append({'full_text': status.full_text, 'likes': status.favorite_count})
+
+    
+    # Sort the tweets by number of likes. This will help us short_list the top ones later
+    sorted_tweets = sorted(tweets, key=lambda x: x['likes'], reverse=True)
+
+    # Get the text and drop the like count from the dictionary
+    full_text = [x['full_text'] for x in sorted_tweets][:tweets_to_return]
+    
+    # Convert the list of tweets into a string of tweets we can use in the prompt later
+    users_tweets = "\n\n".join(full_text)
+            
+    return users_tweets
+
+# Here we'll pull data from a website and return it's text
+def pull_from_website(url):
+    st.write("Getting webpages...")
+    # Doing a try in case it doesn't work
+    try:
+        response = requests.get(url)
+    except:
+        # In case it doesn't work
+        print ("Whoops, error")
+        return
+    
+    # Put your response in a beautiful soup
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Get your text
+    text = soup.get_text()
+
+    # Convert your html to markdown. This reduces tokens and noise
+    text = md(text)
+     
+    return text
+
+# Pulling data from YouTube in text form
+def get_video_transcripts(url):
+    st.write("Getting YouTube Videos...")
+    loader = YoutubeLoader.from_youtube_url(url, add_video_info=True)
+    documents = loader.load()
+    transcript = ' '.join([doc.page_content for doc in documents])
+    return transcript
+
+# Function to change our long text about a person into documents
+def split_text(user_information):
+    # First we make our text splitter
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=20000, chunk_overlap=2000)
+
+    # Then we split our user information into different documents
+    docs = text_splitter.create_documents([user_information])
+
+    return docs
+
+# Prompts - We'll do a dynamic prompt based on the option the users selects
+# We'll hold different instructions in this dictionary below
+response_types = {
+    'Interview Questions' : """
+        Your goal is to generate interview questions that we can ask them
+        Please respond with list of a few interview questions based on the topics above
+    """,
+    '1-Page Summary' : """
+        Your goal is to generate a 1 page summary about them
+        Please respond with a few short paragraphs that would prepare someone to talk to this person
+    """
+}
+
+map_prompt = """You are a helpful AI bot that aids a user in research.
+Below is information about a person named {persons_name}.
+Information will include tweets, interview transcripts, and blog posts about {persons_name}
+Use specifics from the research when possible
+
+{response_type}
+
+% START OF INFORMATION ABOUT {persons_name}:
+{text}
+% END OF INFORMATION ABOUT {persons_name}:
+
+YOUR RESPONSE:"""
+map_prompt_template = PromptTemplate(template=map_prompt, input_variables=["text", "persons_name", "response_type"])
+
+combine_prompt = """
+You are a helpful AI bot that aids a user in research.
+You will be given information about {persons_name}.
+Do not make anything up, only use information which is in the person's context
+
+{response_type}
+
+% PERSON CONTEXT
+{text}
+
+% YOUR RESPONSE:
+"""
+combine_prompt_template = PromptTemplate(template=combine_prompt, input_variables=["text", "persons_name", "response_type"])
+
+# Start Of Streamlit page
+st.set_page_config(page_title="LLM Assisted Interview Prep", page_icon=":robot:")
+
+# Start Top Information
+st.header("LLM Assisted Interview Prep")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("Often professionals would like to improve their emails, but don't have the skills to do so. \n\n This tool \
-                will help you improve your email skills by converting your emails into a more professional format. This tool \
-                is powered by [LangChain](https://langchain.com/) and [OpenAI](https://openai.com) and made by \
+    st.markdown("Have an interview coming up? I bet they are on Twitter or YouTube or the web. This tool is meant to help you generate \
+                interview questions based off of topics they've recently tweeted or talked about.\
+                \n\nThis tool is powered by [BeautifulSoup](https://beautiful-soup-4.readthedocs.io/en/latest/#) [markdownify](https://pypi.org/project/markdownify/) [Tweepy](https://docs.tweepy.org/en/stable/api.html), [LangChain](https://langchain.com/) and [OpenAI](https://openai.com) and made by \
                 [@GregKamradt](https://twitter.com/GregKamradt). \n\n View Source Code on [Github](https://github.com/gkamradt/globalize-text-streamlit/blob/main/main.py)")
 
 with col2:
-    st.image(image='TweetScreenshot.png', width=500, caption='https://twitter.com/DannyRichman/status/1598254671591723008')
+    st.image(image='Researcher.png', width=300, caption='Mid Journey: A researcher who is really good at their job and utilizes twitter to do research about the person they are interviewing. playful, pastels. --ar 4:7')
+# End Top Information
 
-st.markdown("## Enter Your Email To Convert")
+if OPENAI_API_KEY == 'YourAPIKeyIfNotSet':
+    # If the openai key isn't set in the env, put a text box out there
+    OPENAI_API_KEY = get_openai_api_key()
 
-def get_api_key():
-    input_text = st.text_input(label="OpenAI API Key ",  placeholder="Ex: sk-2twmA8tfCb8un4...", key="openai_api_key_input")
-    return input_text
+st.markdown("## :older_man: Larry The LLM Researcher")
 
-openai_api_key = get_api_key()
+# Output type selection by the user
+output_type = st.radio(
+    "Output Type:",
+    ('Interview Questions', '1-Page Summary'))
 
-col1, col2 = st.columns(2)
-with col1:
-    option_tone = st.selectbox(
-        'Which tone would you like your email to have?',
-        ('Formal', 'Informal'))
-    
-with col2:
-    option_dialect = st.selectbox(
-        'Which English Dialect would you like?',
-        ('American', 'British'))
+# Collect information about the person you want to research
+person_name = st.text_input(label="Person's Name",  placeholder="Ex: Elad Gil", key="persons_name")
+twitter_handle = st.text_input(label="Twitter Username",  placeholder="@gregkamradt", key="twitter_user_input")
+youtube_videos = st.text_input(label="YouTube URLs (Use , to seperate videos)",  placeholder="Ex: https://www.youtube.com/watch?v=c_hO_fjmMnk, https://www.youtube.com/watch?v=c_hO_fjmMnk", key="youtube_user_input")
+webpages = st.text_input(label="Web Page URLs (Use , to seperate urls. Must include https://)",  placeholder="@gregkamradt", key="webpage_user_input")
 
-def get_text():
-    input_text = st.text_area(label="Email Input", label_visibility='collapsed', placeholder="Your Email...", key="email_input")
-    return input_text
+# Check to see if there is an @ symbol or not on the user name
+if twitter_handle and twitter_handle[0] == "@":
+    twitter_handle = twitter_handle[1:]
 
-email_input = get_text()
+# Output
+st.markdown(f"### {output_type}:")
 
-if len(email_input.split(" ")) > 700:
-    st.write("Please enter a shorter email. The maximum length is 700 words.")
-    st.stop()
+# Get URLs from a string
+def parse_urls(urls_string):
+    """Split the string by comma and strip leading/trailing whitespaces from each URL."""
+    return [url.strip() for url in urls_string.split(',')]
 
-def update_text_with_example():
-    print ("in updated")
-    st.session_state.email_input = "Sally I am starts work at yours monday from dave"
+# Get information from those URLs
+def get_content_from_urls(urls, content_extractor):
+    """Get contents from multiple urls using the provided content extractor function."""
+    return "\n".join(content_extractor(url) for url in urls)
 
-st.button("*See An Example*", type='secondary', help="Click to see an example of the email you will be converting.", on_click=update_text_with_example)
+if st.button("*Generate Output*", type='secondary', help="Click to generate output based on information"):
+    if not (twitter_handle or youtube_videos or webpages):
+        st.warning('Please provide links to parse', icon="⚠️")
+        st.stop()
 
-st.markdown("### Your Converted Email:")
-
-if email_input:
-    if not openai_api_key:
+    if not OPENAI_API_KEY:
         st.warning('Please insert OpenAI API Key. Instructions [here](https://help.openai.com/en/articles/4936850-where-do-i-find-my-secret-api-key)', icon="⚠️")
         st.stop()
 
-    llm = load_LLM(openai_api_key=openai_api_key)
+    # Go get your data
+    user_tweets = get_original_tweets(twitter_handle) if twitter_handle else ""
+    video_text = get_content_from_urls(parse_urls(youtube_videos), get_video_transcripts) if youtube_videos else ""
+    website_data = get_content_from_urls(parse_urls(webpages), pull_from_website) if webpages else ""
 
-    prompt_with_email = prompt.format(tone=option_tone, dialect=option_dialect, email=email_input)
+    user_information = "\n".join([user_tweets, video_text, website_data])
 
-    formatted_email = llm(prompt_with_email)
+    # First we make our text splitter
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=20000, chunk_overlap=2000)
 
-    st.write(formatted_email)
+    # Then we split our user information into different documents
+    docs = text_splitter.create_documents([user_information])
+
+    llm = load_LLM(openai_api_key=OPENAI_API_KEY)
+
+    chain = load_summarize_chain(llm,
+                             chain_type="map_reduce",
+                             map_prompt=map_prompt_template,
+                             combine_prompt=combine_prompt_template,
+#                              verbose=True
+                            )
+    st.write("Sending to LLM...")
+    output = chain({"input_documents": docs, # The seven docs that were created before
+                    "persons_name": person_name,
+                    "response_type" : response_types[output_type]
+                    })
+
+    st.markdown(f"#### Output:")
+    st.write(output['output_text'])
