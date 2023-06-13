@@ -40,6 +40,7 @@ def load_LLM(openai_api_key):
     llm = ChatOpenAI(temperature=.7, openai_api_key=openai_api_key, max_tokens=2000, model_name='gpt-4')
     return llm
 
+# A function that will be called only if the environment's openai_api_key isn't set
 def get_openai_api_key():
     input_text = st.text_input(label="OpenAI API Key (or set it as .env variable)",  placeholder="Ex: sk-2twmA8tfCb8un4...", key="openai_api_key_input")
     return input_text
@@ -180,10 +181,6 @@ with col2:
     st.image(image='Researcher.png', width=300, caption='Mid Journey: A researcher who is really good at their job and utilizes twitter to do research about the person they are interviewing. playful, pastels. --ar 4:7')
 # End Top Information
 
-if OPENAI_API_KEY == 'YourAPIKeyIfNotSet':
-    # If the openai key isn't set in the env, put a text box out there
-    OPENAI_API_KEY = get_openai_api_key()
-
 st.markdown("## :older_man: Larry The LLM Researcher")
 
 # Output type selection by the user
@@ -214,7 +211,10 @@ def get_content_from_urls(urls, content_extractor):
     """Get contents from multiple urls using the provided content extractor function."""
     return "\n".join(content_extractor(url) for url in urls)
 
-if st.button("*Generate Output*", type='secondary', help="Click to generate output based on information"):
+button_ind = st.button("*Generate Output*", type='secondary', help="Click to generate output based on information")
+
+# Checking to see if the button_ind is true. If so, this means the button was clicked and we should process the links
+if button_ind:
     if not (twitter_handle or youtube_videos or webpages):
         st.warning('Please provide links to parse', icon="⚠️")
         st.stop()
@@ -230,22 +230,26 @@ if st.button("*Generate Output*", type='secondary', help="Click to generate outp
 
     user_information = "\n".join([user_tweets, video_text, website_data])
 
-    # First we make our text splitter
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=20000, chunk_overlap=2000)
+    user_information_docs = split_text(user_information)
 
-    # Then we split our user information into different documents
-    docs = text_splitter.create_documents([user_information])
+    if OPENAI_API_KEY == 'YourAPIKeyIfNotSet':
+        # If the openai key isn't set in the env, put a text box out there
+        OPENAI_API_KEY = get_openai_api_key()
 
+    # Calls the function above
     llm = load_LLM(openai_api_key=OPENAI_API_KEY)
 
     chain = load_summarize_chain(llm,
-                             chain_type="map_reduce",
-                             map_prompt=map_prompt_template,
-                             combine_prompt=combine_prompt_template,
-#                              verbose=True
-                            )
+                                 chain_type="map_reduce",
+                                 map_prompt=map_prompt_template,
+                                 combine_prompt=combine_prompt_template,
+                                 # verbose=True
+                                 )
+    
     st.write("Sending to LLM...")
-    output = chain({"input_documents": docs, # The seven docs that were created before
+
+    # Here we will pass our user information we gathered, the persons name and the response type from the radio button
+    output = chain({"input_documents": user_information_docs, # The seven docs that were created before
                     "persons_name": person_name,
                     "response_type" : response_types[output_type]
                     })
