@@ -9,3 +9,9 @@ Person: Sophia Amoruso
 Twitter: @sophiaamoruso
 YouTube: https://www.youtube.com/watch?v=5qeyarKMfBE
 Web Pages: https://www.sophiaamoruso.com/about
+
+Shaan Puri
+Person: Shaan Puri
+Twitter: @ShaanVP
+YouTube: https://www.youtube.com/watch?v=91yxQC1Fitw
+Web Pages: https://www.shaanpuri.com/

@@ -190,9 +190,9 @@ output_type = st.radio(
 
 # Collect information about the person you want to research
 person_name = st.text_input(label="Person's Name",  placeholder="Ex: Elad Gil", key="persons_name")
-twitter_handle = st.text_input(label="Twitter Username",  placeholder="@gregkamradt", key="twitter_user_input")
+twitter_handle = st.text_input(label="Twitter Username",  placeholder="@eladgil", key="twitter_user_input")
 youtube_videos = st.text_input(label="YouTube URLs (Use , to seperate videos)",  placeholder="Ex: https://www.youtube.com/watch?v=c_hO_fjmMnk, https://www.youtube.com/watch?v=c_hO_fjmMnk", key="youtube_user_input")
-webpages = st.text_input(label="Web Page URLs (Use , to seperate urls. Must include https://)",  placeholder="@gregkamradt", key="webpage_user_input")
+webpages = st.text_input(label="Web Page URLs (Use , to seperate urls. Must include https://)",  placeholder="https://eladgil.com/", key="webpage_user_input")
 
 # Check to see if there is an @ symbol or not on the user name
 if twitter_handle and twitter_handle[0] == "@":
@@ -223,6 +223,10 @@ if button_ind:
         st.warning('Please insert OpenAI API Key. Instructions [here](https://help.openai.com/en/articles/4936850-where-do-i-find-my-secret-api-key)', icon="⚠️")
         st.stop()
 
+    if OPENAI_API_KEY == 'YourAPIKeyIfNotSet':
+        # If the openai key isn't set in the env, put a text box out there
+        OPENAI_API_KEY = get_openai_api_key()
+
     # Go get your data
     user_tweets = get_original_tweets(twitter_handle) if twitter_handle else ""
     video_text = get_content_from_urls(parse_urls(youtube_videos), get_video_transcripts) if youtube_videos else ""
@@ -231,10 +235,6 @@ if button_ind:
     user_information = "\n".join([user_tweets, video_text, website_data])
 
     user_information_docs = split_text(user_information)
-
-    if OPENAI_API_KEY == 'YourAPIKeyIfNotSet':
-        # If the openai key isn't set in the env, put a text box out there
-        OPENAI_API_KEY = get_openai_api_key()
 
     # Calls the function above
     llm = load_LLM(openai_api_key=OPENAI_API_KEY)
